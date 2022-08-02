@@ -10,9 +10,6 @@ import torch
 import torch.nn as nn
 
 
-from SimCLRv2 import resnet as SIMv2
-
-
 class SimCLR(nn.Module):
     """
     Module representing SimCLR. 
@@ -82,24 +79,20 @@ class SimCLR(nn.Module):
         
         
     @staticmethod
-    def load(path=None, depth=50, width=2, sk_ratio=0.0625, map_location=None):
+    def load(path, encoder_arch, head_arch, map_location=None):
         """
-        Easily load a SimCLR module.
+        Easily load a SimCLR module saved by the save() method.
 
         Parameters
         ----------
-        path : str, optional
-            Path to the saved model. Load the original by default.
-            The default is None.
-        depth : int, optional
-            The depth of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 50.
-        width : int, optional
-            The width of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 2.
-        sk_ratio : float, optional
-            The sk_ratio of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 0.0625.
+        path : str
+            Path to the saved SimCLR model. 
+        encoder_arch : torch.nn.Module
+            Instance of the model representing the encoder. This should be the same 
+            as what you previously used for correct mapping of the weights.
+        head_arch : torch.nn.Module
+            Instance of the model representing the head. This should be the same 
+            as what you previously used for correct mapping of the weights.
         map_location : function, torch device, str or dict
             Specify how to remap storage locations. See torch.load for more details.
             The default is None.
@@ -111,56 +104,11 @@ class SimCLR(nn.Module):
 
         """
         
-        if path is None:
-            sk = 'sk1' if sk_ratio == 0.0625 else 'sk0'
-            path = f'SimCLRv2/torch_checkpoints/Pretrained/r{depth}_{width}x_{sk}_ema.pth'
-        encoder, head = SIMv2.get_resnet(depth=depth, width_multiplier=width,
-                                        sk_ratio=sk_ratio)
         checkpoint = torch.load(path, map_location=map_location)
-        encoder.load_state_dict(checkpoint['encoder'])
-        head.load_state_dict(checkpoint['head'])
+        encoder_arch.load_state_dict(checkpoint['encoder'])
+        head_arch.load_state_dict(checkpoint['head'])
         
-        return SimCLR(encoder, head)
+        return SimCLR(encoder_arch, head_arch)
     
-    
-    @staticmethod
-    def load_encoder(path=None, depth=50, width=2, sk_ratio=0.0625, map_location=None):
-        """
-        Easily load the encoder of a SimCLR module.
-
-        Parameters
-        ----------
-        path : str, optional
-            Path to the saved model. Load the original by default.
-            The default is None.
-        depth : int, optional
-            The depth of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 50.
-        width : int, optional
-            The width of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 2.
-        sk_ratio : float, optional
-            The sk_ratio of the resnet used as encoder. This is needed to 
-            reconstruct the module. The default is 0.0625.
-        map_location : function, torch device, str or dict
-            Specify how to remap storage locations. See torch.load for more details.
-            The default is None.
-
-        Returns
-        -------
-        torch.nn.Module
-            The encoder module.
-
-        """
-        
-        if path is None:
-            sk = 'sk1' if sk_ratio == 0.0625 else 'sk0'
-            path = f'SimCLRv2/torch_checkpoints/Pretrained/r{depth}_{width}x_{sk}_ema.pth'
-        encoder, _ = SIMv2.get_resnet(depth=depth, width_multiplier=width,
-                                        sk_ratio=sk_ratio)
-        checkpoint = torch.load(path, map_location=map_location)
-        encoder.load_state_dict(checkpoint['encoder'])
-        
-        return encoder
         
     

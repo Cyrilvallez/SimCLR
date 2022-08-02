@@ -33,7 +33,7 @@ class Gather(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         
-        # grad_output must NEVER be modified inplace, thus we clone it
+        # clone() is differentiable
         grad_input = grad_output.clone()
         
         # reduce is needed since the loss will be computed only for the 
@@ -42,10 +42,10 @@ class Gather(torch.autograd.Function):
         dist.all_reduce(grad_input, op=dist.ReduceOp.SUM, async_op=False)
 
         # Get the indices of the batch of the current process
-        idx_from = dist.get_rank()*ctx.batch_size
-        idx_to = (dist.get_rank() + 1)*ctx.batch_size
+        start = dist.get_rank()*ctx.batch_size
+        end = (dist.get_rank() + 1)*ctx.batch_size
         
-        return grad_input[idx_from:idx_to]
+        return grad_input[start:end]
     
     
     
