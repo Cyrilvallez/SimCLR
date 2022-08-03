@@ -6,6 +6,7 @@ Created on Tue Jun 28 11:05:38 2022
 @author: cyrilvallez
 """
 
+import torchvision
 import torchvision.transforms as T
 from torch.utils.data import Dataset
 from PIL import Image
@@ -91,6 +92,9 @@ class SimCLR_Transforms(object):
         return x1, x2
     
     
+# Files with this extensions are considered valid images
+VALID_IMAGE_EXTENSION = ('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')
+    
     
 class ImageDataset(Dataset):
     """
@@ -118,7 +122,7 @@ class ImageDataset(Dataset):
             for root, subdirs, files in os.walk(dataset_path):
                 subdirs[:] = [subdir for subdir in subdirs if not subdir.startswith('.')]
                 for file in files:
-                    if not file.startswith('.'):
+                    if file.lower().endswith(VALID_IMAGE_EXTENSION) and not file.startswith('.'):
                         images.append(os.path.join(root, file))
                 
             # Conversion to numpy byte array is important when using different
@@ -143,5 +147,81 @@ class ImageDataset(Dataset):
         x1, x2 = self.transforms(image)
             
         return x1, x2
+    
+    
+    
+class ImageNet(torchvision.datasets.ImageNet):
+    """
+    Class representing the ImageNet dataset.
+    
+    Parameters
+    ----------
+    root : str
+        Root directory of the ImageNet Dataset.
+    split : str, optional
+        The dataset split. Supports `train`, or `val`. The default is 'train'.
+    loader : function, optional
+        A function to load an image given its path. The default is None.
+    size : tuple, optional
+        Final size for resizing the images. The default is 224.
+    jitter : float, optional
+        The color jitter strength. The default is 1..
+
+    """
+    
+    
+    def __init__(self, root, split='train', download=False, loader=None,
+                 size=224, jitter=1.):
+        
+        super().__init__(root=root, split=split, transform=None,
+                         target_transform=None, loader=loader)
+        self.transforms = SimCLR_Transforms(size=size, jitter=jitter)
+        
+    def __getitem__(self, index):
+        
+        image, _ = super().__getitem__(index)
+        # Draw the 2 data augmentation from the augmentation policy
+        x1, x2 = self.transforms(image)
+            
+        return x1, x2
         
     
+class CIFAR10(torchvision.datasets.CIFAR10):
+    """
+    Class representing the CIFAR10 dataset.
+    
+    Parameters
+    ----------
+    root : str
+        Root directory of dataset where directory cifar-10-batches-py exists
+        or will be saved to if download is set to True.
+    train : bool, optional
+        If True, creates dataset from training set, otherwise creates
+        from test set. The default is True.
+    download : bool, optional
+        If true, downloads the dataset from the internet and puts it in
+        root directory. If dataset is already downloaded, it is not downloaded
+        again. The default is False.
+    size : tuple, optional
+        Final size for resizing the images. The default is 224.
+    jitter : float, optional
+        The color jitter strength. The default is 1..
+
+    """
+    
+    
+    def __init__(self, root, train=True, download=False, size=224, jitter=1.):
+        
+        super().__init__(root=root, train=train, transform=None,
+                         target_transform=None, download=download)
+        self.transforms = SimCLR_Transforms(size=size, jitter=jitter)
+        
+    def __getitem__(self, index):
+        
+        image, _ = super().__getitem__(index)
+        # Draw the 2 data augmentation from the augmentation policy
+        x1, x2 = self.transforms(image)
+            
+        return x1, x2
+        
+        
