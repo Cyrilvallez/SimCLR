@@ -75,7 +75,7 @@ def get_optimizer(model, epochs, optimizer, learning_rate, weight_decay,
 
 
 def train_one_epoch(model, train_dataloader, criterion, optimizer,
-                    rank, distributed):
+                    local_rank, distributed):
     """
     Train the model for one epoch.
 
@@ -89,8 +89,8 @@ def train_one_epoch(model, train_dataloader, criterion, optimizer,
         The loss function.
     optimizer : torch.optim.Optimizer
         The optimizer used.
-    rank : int
-        The rank of the process.
+    local_rank : int
+        The local rank of the process inside the current node.
     distributed : bool
         Whether we are performing sitributed training or not.
 
@@ -107,8 +107,8 @@ def train_one_epoch(model, train_dataloader, criterion, optimizer,
         
         # Get batch and set devices
         x1, x2 = batch
-        x1 = x1.cuda(rank)
-        x2 = x2.cuda(rank)
+        x1 = x1.cuda(local_rank)
+        x2 = x2.cuda(local_rank)
         
         # clear the gradients
         optimizer.zero_grad()
@@ -142,7 +142,7 @@ def train_one_epoch(model, train_dataloader, criterion, optimizer,
 
 
 
-def validate_one_epoch(model, val_dataloader, criterion, rank=0):
+def validate_one_epoch(model, val_dataloader, criterion, local_rank):
     """
     Perform validation for one epoch.
 
@@ -154,8 +154,8 @@ def validate_one_epoch(model, val_dataloader, criterion, rank=0):
         Dataloader corrresponding to the validation set.
     criterion : torch.nn.Module
         The loss function.
-    rank : int
-        The rank of the process.
+    local_rank : int
+        The local rank of the process inside the current node.
 
     Returns
     -------
@@ -172,8 +172,8 @@ def validate_one_epoch(model, val_dataloader, criterion, rank=0):
             
             # Get batch and set devices
             x1, x2 = batch
-            x1 = x1.cuda(rank)
-            x2 = x2.cuda(rank)
+            x1 = x1.cuda(local_rank)
+            x2 = x2.cuda(local_rank)
             
             # Forward pass
             h1, h2 = model(x1, x2)
@@ -190,7 +190,7 @@ def validate_one_epoch(model, val_dataloader, criterion, rank=0):
         
 
 def train(model, epochs, train_dataloader, val_dataloader, criterion, optimizer,
-          scheduler, writer, sampler):
+          scheduler, writer, sampler, local_rank):
     """
     Train the model for the given number of epochs, and log the results.
 
@@ -215,6 +215,8 @@ def train(model, epochs, train_dataloader, val_dataloader, criterion, optimizer,
         The writer where to log the results.
     sampler : torch.utils.data.distributed.DistributedSampler
         The sampler in case of distributed training.
+    local_rank : int
+        The local rank of the process inside the current node.
 
     Returns
     -------
@@ -242,7 +244,7 @@ def train(model, epochs, train_dataloader, val_dataloader, criterion, optimizer,
         # Train
         model.train(True)
         train_loss = train_one_epoch(model, train_dataloader, criterion, optimizer,
-                                     rank, distributed)
+                                     local_rank, distributed)
         
         if scheduler is not None:
             # Get actual learning rate
@@ -258,7 +260,7 @@ def train(model, epochs, train_dataloader, val_dataloader, criterion, optimizer,
             if rank == 0:
                 model.eval()
                 val_loss = validate_one_epoch(model, val_dataloader, criterion,
-                                              rank)
+                                              local_rank)
                 
         if rank == 0:
             # Print a summary of current epoch
@@ -290,40 +292,14 @@ def train(model, epochs, train_dataloader, val_dataloader, criterion, optimizer,
             
             
             
-def setup(rank, world_size):
+def setup(rank, args):
     """
     Initializes the process group.
 
     Parameters
     ----------
     rank : int
-        The rank of the process.
-    world_size : int
-        The number of processes.
-
-    Returns
-    -------
-    None.
-
-    """
-    
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-
-    # initialize the process group
-    dist.init_process_group('nccl', rank=rank, world_size=world_size)    
-
-        
-            
-def main(rank, args):
-    """
-    Main function running all the training from the parameters contained in
-    `args`.
-
-    Parameters
-    ----------
-    rank : int
-        The rank of the process.
+        The global rank of the process.
     args : Namespace
         Namespace containing all parameters for a run. See function `parse_args` 
         for details on every member.
@@ -334,25 +310,54 @@ def main(rank, args):
 
     """
     
+    os.environ['MASTER_ADDR'] = args.master_address
+    os.environ['MASTER_PORT'] = args.master_port
+
     # initialize the process group
-    if args.gpus > 1:
-        setup(rank, args.gpus)
+    dist.init_process_group('nccl', rank=rank, world_size=args.world_size)    
+
         
-    torch.manual_seed(123)
+            
+def main(local_rank, args):
+    """
+    Main function running all the training from the parameters contained in
+    `args`.
+
+    Parameters
+    ----------
+    local_rank : int
+        The local rank of the process inside the current node.
+    args : Namespace
+        Namespace containing all parameters for a run. See function `parse_args` 
+        for details on every member.
+
+    Returns
+    -------
+    None.
+
+    """
+    
+    # global rank
+    rank = args.node_index * args.gpus + local_rank
+    
+    # initialize the process group
+    if args.world_size > 1:
+        setup(rank, args)
+    
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     
     # Model
     path = None if args.model == 'original' else args.model
     model = SimCLR.load(path, args.arch_depth, args.arch_width, args.arch_sk)
     
     # Configure the model
-    model = model.cuda(rank)
-    if args.gpus > 1:
+    model = model.cuda(local_rank)
+    if args.world_size > 1:
         # converts to synchronized batchnorm layers
         model = SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model,
-                    device_ids=[rank],
-                    find_unused_parameters=True)
-    
+        model = DDP(model, device_ids=[local_rank])
+                   
     # Optimizer and scheduler
     optimizer, scheduler = get_optimizer(model, args.epochs, args.optimizer, 
                                          args.lr, args.weight_decay, args.momentum,
@@ -369,8 +374,8 @@ def main(rank, args):
         val_dataset = ImageDataset(args.val_dataset, args.size, args.jitter)
     
     # Create the dataloaders
-    if args.gpus > 1:
-        train_sampler = DistributedSampler(train_dataset, num_replicas=args.gpus,
+    if args.world_size > 1:
+        train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size,
                                            rank=rank, shuffle=True, drop_last=False)
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
                                       sampler=train_sampler, num_workers=args.workers,
@@ -404,13 +409,13 @@ def main(rank, args):
         
     # Perform training
     train(model, args.epochs, train_dataloader, val_dataloader, criterion, optimizer,
-              scheduler, writer, train_sampler)
+              scheduler, writer, train_sampler, local_rank)
     
     if rank == 0:
         print('Training ended.')
         
     # Destroy process group
-    if args.gpus > 1:
+    if args.world_size > 1:
         dist.destroy_process_group()
     
 
@@ -427,17 +432,6 @@ def parse_args():
     """
     
     parser = argparse.ArgumentParser(description='SimCLR finetuning')
-    
-    # Model arguments
-    parser.add_argument('--model', type=str, default='original',
-                        help=('Path to the model to finetune. The default'
-                              ' `original` will use the pretrained Resnet50 2x'))
-    parser.add_argument('--arch_depth', type=int, default=50,
-                        help='The depth of the original encoder.')
-    parser.add_argument('--arch_width', type=int, default=2,
-                        help='The width of the original encoder.')
-    parser.add_argument('--arch_sk', type=float, default=0.0625,
-                        help='The sk ratio of the original encoder.')
     
     # Transform and dataset arguments
     parser.add_argument('--train_dataset', type=str, required=True,
@@ -458,7 +452,7 @@ def parse_args():
                         help='The number of epochs to perform.')
     parser.add_argument('--batch_size', type=int, default=32, 
                         help=('The batch size per GPU. Multiply by the number of'
-                              ' GPUs you provide to get the total batch size'))
+                              ' GPUs and nodes you provide to get the total batch size'))
     parser.add_argument('--temperature', type=float, default=0.1, 
                         help='The temperature for the loss.')
     parser.add_argument('--weight_decay', type=float, default=1e-6, 
@@ -471,21 +465,34 @@ def parse_args():
                         help='Whether to use a cosine scheduler.')
     
     # Config arguments
+    parser.add_argument('--nodes', type=int, default=1, 
+                        help='The number of nodes on which to run.')
+    parser.add_argument('--node_index', type=int, default=0,
+                        help='The index of the current node (between 0 and `nodes - 1`')
     parser.add_argument('--gpus', type=int, default=8,
-                        help='The number of GPUs to use.')
+                        help='The number of GPUs to use per node.')
     parser.add_argument('--workers', type=int, default=8,
                         help='The number of workers per GPUs to use.')
     parser.add_argument('--log_dir', type=str, required=True,
                         help='Where to save the results.')
+    parser.add_argument('--master_address', type=str, default='localhost',
+                        help='Master adress of the main node.')
+    parser.add_argument('--master_port', type=str, default='12355',
+                        help='Master port of the main node.')
+    parser.add_argument('--seed', type=int, default=123,
+                        help='Random seed for the number generators.')
+    
     
     args = parser.parse_args()
+    
+    args.world_size = args.nodes*args.gpus
     
     # Remove last `/` if present in log_dir
     if args.log_dir[-1] == '/':
         args.log_dir = args.log_dir[0:-1]
     # if lr is 0, we use a square root rule
     if args.lr == 0:
-        args.lr = 0.005*np.sqrt(args.batch_size*args.gpus)
+        args.lr = 0.005*np.sqrt(args.batch_size*args.world_size)
     
     return args
 
